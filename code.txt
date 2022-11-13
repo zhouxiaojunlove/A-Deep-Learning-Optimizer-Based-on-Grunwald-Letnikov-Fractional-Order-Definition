@@ -1,0 +1,374 @@
+import math
+import random
+import torch
+import time
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from sklearn.metrics import r2_score
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from d2l import torch as d2l
+from collections import deque
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+
+device = d2l.try_gpu()
+
+
+class FCSGD_G_L(Optimizer):
+
+
+    def __init__(self, params, lr=1e-1, weight_decay=1e-8,r=0.1):  #r on behalf of fractional order 
+        if not 0.0 <= lr:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+
+        if not 0.0 <= weight_decay:
+            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+        
+        if not -2.0 <= r:
+            raise ValueError("Invalid r value: {}".format(r))
+            
+        defaults = dict(lr=lr,weight_decay=weight_decay,r=r)
+        super(FCSGD_G_L, self).__init__(params, defaults)
+
+    def __setstate__(self, state):
+        super(FCSGD_G_L, self).__setstate__(state)
+    
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                if grad.is_sparse:
+                    raise RuntimeError('FCGD_G-L does not support sparse gradients')
+                    
+                state = self.state[p]
+
+                # State initialization
+                if len(state) == 0:
+                    state['step'] = 0
+                    
+                    state['present_grad'] = torch.zeros_like(p.data)
+                    
+                    # Previous gradient
+                    state['previous_grad_1'] = torch.zeros_like(p.data)
+                    state['previous_grad_2'] = torch.zeros_like(p.data)
+                    state['previous_grad_3'] = torch.zeros_like(p.data)
+                    state['previous_grad_4'] = torch.zeros_like(p.data)
+                    state['previous_grad_5'] = torch.zeros_like(p.data)
+                    state['previous_grad_6'] = torch.zeros_like(p.data)
+                    state['previous_grad_7'] = torch.zeros_like(p.data)
+                    state['previous_grad_8'] = torch.zeros_like(p.data)
+                    state['previous_grad_9'] = torch.zeros_like(p.data)
+                    state['previous_grad_10'] = torch.zeros_like(p.data)
+                    
+                    #fractional order
+                    r = group['r']
+                    
+                    #coefficients by a novel G-L
+                    state['w0'] = 1
+                    state['w1'] = (1-(r+1)/2)*state['w0']
+                    state['w2'] = (1-(r+1)/3)*state['w1']
+                    state['w3'] = (1-(r+1)/4)*state['w2']
+                    state['w4'] = (1-(r+1)/5)*state['w3']
+                    state['w5'] = (1-(r+1)/6)*state['w4']
+                    state['w6'] = (1-(r+1)/7)*state['w5']
+                    state['w7'] = (1-(r+1)/8)*state['w6']
+                    state['w8'] = (1-(r+1)/9)*state['w7']
+                    state['w9'] = (1-(r+1)/10)*state['w8']
+                    state['w10'] = (1-(r+1)/11)*state['w9']
+                    
+                
+                
+                fractional_order_grad = state['present_grad']
+                
+                a = [1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+                random.shuffle(a)
+                
+                fractional_order_grad.add_(1,grad.clone())\
+                .add_(a[0]*state['w1'],state['previous_grad_1'])\
+                .add_(a[1]*state['w2'],state['previous_grad_2'])\
+                .add_(a[2]*state['w3'],state['previous_grad_3'])\
+                .add_(a[3]*state['w4'],state['previous_grad_4'])\
+                .add_(a[4]*state['w5'],state['previous_grad_5'])\
+                .add_(a[5]*state['w6'],state['previous_grad_6'])\
+                .add_(a[6]*state['w7'],state['previous_grad_7'])\
+                .add_(a[7]*state['w8'],state['previous_grad_8'])\
+                .add_(a[8]*state['w9'],state['previous_grad_9'])\
+                .add_(a[9]*state['w10'],state['previous_grad_10'])
+                
+                
+                state['previous_grad_10'] = state['previous_grad_9']
+                state['previous_grad_9'] = state['previous_grad_8']
+                state['previous_grad_8'] = state['previous_grad_7']
+                state['previous_grad_7'] = state['previous_grad_6']
+                state['previous_grad_6'] = state['previous_grad_5']
+                state['previous_grad_5'] = state['previous_grad_4']
+                state['previous_grad_4'] = state['previous_grad_3']
+                state['previous_grad_3'] = state['previous_grad_2']
+                state['previous_grad_2'] = state['previous_grad_1']
+                state['previous_grad_1'] = grad.clone()
+                
+                state['step'] += 1
+                
+                if group['weight_decay'] != 0:
+                    fractional_order_grad.add_(group['weight_decay'], p.data)
+                    
+                fractional_order_grad_1 = fractional_order_grad
+                
+                state['present_grad'] = torch.zeros_like(p.data)
+                
+                step_size = group['lr']
+                
+                p.data.add_(-step_size, fractional_order_grad_1)
+                
+        return loss
+
+
+class FCAdam_G_L(Optimizer):
+
+
+    def __init__(self, params, lr=1e-1, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-8,r=0.3):  #r on behalf of fractional order 
+        if not 0.0 <= lr:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+         
+        if not 0.0 <= weight_decay:
+            raise ValueError("Invalid weight_decay value: {}".format(weight_decay)) 
+        
+        if not 0.0 <= eps:
+            raise ValueError("Invalid epsilon value: {}".format(eps))
+            
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
+            
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
+            
+        if not -2.0 <= r:
+            raise ValueError("Invalid r value: {}".format(r))
+            
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,r=r)
+        super(FCAdam_G_L, self).__init__(params, defaults)
+
+    def __setstate__(self, state):
+        super(FCAdam_G_L, self).__setstate__(state)
+        
+    
+    def step(self, closure=None):
+
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                if grad.is_sparse:
+                    raise RuntimeError('FCAdam_G_L does not support sparse gradients')
+
+                state = self.state[p]
+
+                # State initialization
+                if len(state) == 0:
+                    state['step'] = 0
+                    
+                    state['present_grad'] = torch.zeros_like(p.data)
+                    
+                    # Previous gradient
+                    state['previous_grad_1'] = torch.zeros_like(p.data)
+                    state['previous_grad_2'] = torch.zeros_like(p.data)
+                    state['previous_grad_3'] = torch.zeros_like(p.data)
+                    state['previous_grad_4'] = torch.zeros_like(p.data)
+                    state['previous_grad_5'] = torch.zeros_like(p.data)
+                    state['previous_grad_6'] = torch.zeros_like(p.data)
+                    state['previous_grad_7'] = torch.zeros_like(p.data)
+                    state['previous_grad_8'] = torch.zeros_like(p.data)
+                    state['previous_grad_9'] = torch.zeros_like(p.data)
+                    state['previous_grad_10'] = torch.zeros_like(p.data)
+                    
+                    #fractional order
+                    r = group['r']
+                    
+                    #coefficients by a novel G-L
+                    state['w0'] = 1
+                    state['w1'] = (1-(r+1)/2)*state['w0']
+                    state['w2'] = (1-(r+1)/3)*state['w1']
+                    state['w3'] = (1-(r+1)/4)*state['w2']
+                    state['w4'] = (1-(r+1)/5)*state['w3']
+                    state['w5'] = (1-(r+1)/6)*state['w4']
+                    state['w6'] = (1-(r+1)/7)*state['w5']
+                    state['w7'] = (1-(r+1)/8)*state['w6']
+                    state['w8'] = (1-(r+1)/9)*state['w7']
+                    state['w9'] = (1-(r+1)/10)*state['w8']
+                    state['w10'] = (1-(r+1)/11)*state['w9']
+                    
+                    #initialize first moment and second moment
+                    state['m'] = 0;state['v'] = 0
+                
+                fractional_order_grad = state['present_grad']
+                
+                a = [1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+                random.shuffle(a)
+                
+                fractional_order_grad.add_(1,grad.clone())\
+                .add_(a[0]*state['w1'],state['previous_grad_1'])\
+                .add_(a[1]*state['w2'],state['previous_grad_2'])\
+                .add_(a[2]*state['w3'],state['previous_grad_3'])\
+                .add_(a[3]*state['w4'],state['previous_grad_4'])\
+                .add_(a[4]*state['w5'],state['previous_grad_5'])\
+                .add_(a[5]*state['w6'],state['previous_grad_6'])\
+                .add_(a[6]*state['w7'],state['previous_grad_7'])\
+                .add_(a[7]*state['w8'],state['previous_grad_8'])\
+                .add_(a[8]*state['w9'],state['previous_grad_9'])\
+                .add_(a[9]*state['w10'],state['previous_grad_10'])
+                
+                state['previous_grad_10'] = state['previous_grad_9']
+                state['previous_grad_9'] = state['previous_grad_8']
+                state['previous_grad_8'] = state['previous_grad_7']
+                state['previous_grad_7'] = state['previous_grad_6']
+                state['previous_grad_6'] = state['previous_grad_5']
+                state['previous_grad_5'] = state['previous_grad_4']
+                state['previous_grad_4'] = state['previous_grad_3']
+                state['previous_grad_3'] = state['previous_grad_2']
+                state['previous_grad_2'] = state['previous_grad_1']
+                state['previous_grad_1'] = grad.clone()
+                
+                beta1, beta2 = group['betas']
+
+                state['step'] += 1
+                
+                if group['weight_decay'] != 0:
+                    fractional_order_grad.add_(group['weight_decay'], p.data)
+                
+                fractional_order_grad_1 = fractional_order_grad
+                
+                state['present_grad'] = torch.zeros_like(p.data)
+
+                step_size = group['lr']
+                
+                state['m'] = torch.add(beta1*state['m'],(1-beta1)*fractional_order_grad_1)
+                
+                state['v'] = torch.add(beta2*state['v'],(1-beta2)*fractional_order_grad_1**2)
+                
+                m = state['m']/(1 - beta1**state['step'])
+                
+                v = state['v']/(1 - beta2**state['step'])
+                
+                p.data.add_(-step_size, m/(torch.sqrt(v) + group['eps']))
+                
+        return loss
+
+
+#Mean Square Error
+def MSE(pred,true):
+    return np.mean((pred-true)**2)
+
+#Root Mean Square Error
+def RMSE(pred, true):
+    return np.sqrt(MSE(pred, true))
+
+#Mean Absolute Error
+def MAE(pred, true):
+    return np.mean(np.abs(pred-true))
+
+#Mean Absolute Percentage Error
+def MAPE(pred, true):
+    return np.mean(np.abs((pred - true) / true))
+
+
+#DJIA data preprocessing
+slide_windows_size = 30
+pre_days = 1
+df_DJIA = pd.read_csv('.\DJIA.csv')
+del df_DJIA['Date']
+df_DJIA['label'] = df_DJIA['Close'].shift(-pre_days)
+df_DJIA.dropna()
+scaler = StandardScaler()
+sca_X_DJIA = scaler.fit_transform(df_DJIA.iloc[:,:-1])
+deq_DJIA = deque(maxlen=slide_windows_size)
+X_DJIA = []
+for i in sca_X_DJIA:
+    deq_DJIA.append(list(i))
+    if len(deq_DJIA)==slide_windows_size:
+        X_DJIA.append(list(deq_DJIA))
+X_DJIA = X_DJIA[:-pre_days]
+y_DJIA = scaler.fit_transform(pd.DataFrame(df_DJIA['label'].values[slide_windows_size-1:-pre_days]))
+X_DJIA, y_DJIA = torch.Tensor(X_DJIA),torch.Tensor(y_DJIA)
+#X_DJIA, y_DJIA = X_DJIA.to(device), y_DJIA.to(device)
+X_train,X_test,y_train,y_test = train_test_split(X_DJIA,y_DJIA,test_size=0.2,shuffle=False)
+X_test,X_test1,y_test,y_test1 = train_test_split(X_test,y_test,test_size=0.5,shuffle=False)
+
+
+#DJIA network model
+class Net(nn.Module):
+    def __init__(self,):
+        super(Net,self).__init__()
+        self.rnn = nn.LSTM(
+            input_size=5,
+            hidden_size=64,
+            num_layers=3,
+            dropout=0.2,
+            batch_first=True
+        )
+        self.linear_1 = nn.Linear(64,32)
+        self.linear_2 = nn.Linear(32,1)
+    
+    def forward(self,x):
+        out,(hn,cn) = self.rnn(x)
+        hn = self.linear_1(hn[2])
+        hn = self.linear_2(hn)
+        hn = hn.view(-1,1)
+        return out,hn
+
+#DJIA train and test
+epoch = 250
+batch_size = 256
+model = Net()
+model.to(device)
+criterion = nn.MSELoss()
+
+#training for DJIA
+optimizer = FCSGD_G_L(model.parameters(),lr=0.01,weight_decay=0,r=0.1)
+#optimizer = FCAdam_G_L(model.parameters(),lr=0.0001,weight_decay=0,r=0.3)
+ss = []
+timestart = time.time()
+for i in range(epoch):
+    if 50<=i<100:
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = 0.005
+    if 100<=i<150:
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = 0.001
+    if 150<=i<200:
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = 0.0005
+    if 200<=i<250:
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = 0.0001
+    loss_sum = 0
+    start = np.random.randint(11,size=1)[0]  #Generate a random integer between 0 and 10
+    while start+batch_size<len(X_train):
+        X_batch = X_train[start:start+batch_size]
+        y_batch = y_train[start:start+batch_size]
+        start = start+batch_size
+        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        out,hn = model(X_batch)
+        loss = criterion(hn,y_batch)
+        model.zero_grad()
+        loss.backward()
+        optimizer.step()
+        loss_sum +=loss
+    ss.append(loss_sum.cpu().detach().numpy())
+    print('epoch:{0},loss:{1}'.format(i,loss_sum.cpu().detach().numpy()))
+torch.save(model, "lstm_best.pth")
+timeend = time.time()
+spend_time = timeend-timestart
+print(spend_time)
